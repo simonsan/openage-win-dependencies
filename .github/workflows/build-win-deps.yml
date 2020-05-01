@@ -1,0 +1,81 @@
+name: Windows 10
+on: [push, pull_request]
+
+jobs:
+  build_windows_dependencies:
+    name: Building vcpkg ${{ matrix.triplet }} dependencies for openage
+    runs-on: windows-2019
+    continue-on-error: false                                          # DEBUG: set to true
+    strategy:
+      fail-fast: false
+      matrix:
+          triplet: [x64-windows, x86-windows]
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - name: Clone main openage repository
+        run: |
+          git clone --single-branch -b workflows/create-win10 https://github.com/simonsan/openage.git ${{ runner.workspace }}\deps\openage
+          cd ${{ runner.workspace }}\deps\openage
+          git reset --hard HEAD
+
+      - name: Export shell environment variables
+        uses: lukka/set-shell-env@v1.0
+        with:
+          PreferredToolArchitecture: '${{matrix.arch}}'
+          vcpkgResponseFile: '${{ runner.workspace }}\deps\openage\.github\workflows-support\response_file.txt'
+          vcpkgGitCommitID: '28ab0b15cd7cdc1004cac9a28a5ecab198c161b9'        # Updated 26/04/2020
+          
+      # Pinned CMake here
+      - name: Install pinned CMake Version
+        uses: lukka/get-cmake@v3.17.1
+
+      - name: Install Vcpkg dependencies
+        uses: lukka/run-vcpkg@v2.1
+        with:
+          vcpkgArguments: '@${{ env.vcpkgResponseFile }}'
+          vcpkgTriplet: '${{ matrix.triplet }}'
+          vcpkgGitCommitId: '${{ env.vcpkgGitCommitID }}'
+          vcpkgDirectory: '${{ runner.workspace }}\deps\vcpkg'
+          cleanAfterBuild: 'true'
+          appendedCacheKey: '${{ hashFiles(env.vcpkgResponseFile) }}'
+
+      - name: Copy build dependencies
+        shell: cmd
+        run: |
+          MD "${{ runner.temp }}\openage-dependencies\"
+
+          MD "${{ runner.temp }}\openage-dependencies\vcpkg\"
+
+          ROBOCOPY ${{ env.RUNVCPKG_VCPKG_ROOT }}\installed\ ${{ runner.temp }}\openage-dependencies\vcpkg\ /E /COPYALL
+
+          MD "${{ runner.temp }}\openage-dependencies\vcpkg\scripts\"
+
+          ROBOCOPY ${{ env.RUNVCPKG_VCPKG_ROOT }}\scripts\ ${{ runner.temp }}\openage-dependencies\vcpkg\scripts\ /E /COPYALL
+
+          IF %ERRORLEVEL% LSS 8 EXIT /B 0
+
+      - name:  Get Date
+        id:    get-date
+        shell: bash
+        run:   echo "::set-output name=date::$(date +%F)"
+
+#      - uses: actions/upload-artifact@master
+#        with:
+#          name: openage-dependencies-${{ matrix.triplet }}-${{ steps.get-date.outputs.date }}
+#          path: ${{ runner.temp }}\openage-dependencies\
+
+      - name: Zip Release
+        shell: bash
+        run: |
+          7z a -t7z -mx=9 "openage-dependencies-${{ matrix.triplet }}-${{ steps.get-date.outputs.date }}.7z" "${{ runner.temp }}\openage-dependencies\*"
+
+      - name: Upload files to a GitHub release
+        uses: svenstaro/upload-release-action@1.0.1
+        with:
+          repo_token: ${{ secrets.RELEASE_TOKEN }}
+          file: openage-dependencies-${{ matrix.triplet }}-${{ steps.get-date.outputs.date }}.7z
+          asset_name: openage-dependencies-${{ matrix.triplet }}-latest.7z
+          tag: master
+          overwrite: true
